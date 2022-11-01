@@ -1,10 +1,9 @@
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::elst::ElstBox;
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct EdtsBox {
     pub elst: Option<ElstBox>,
 }
@@ -13,36 +12,19 @@ impl EdtsBox {
     pub(crate) fn new() -> EdtsBox {
         Default::default()
     }
+}
 
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for EdtsBox {
+    fn box_type() -> BoxType {
         BoxType::EdtsBox
     }
 
-    pub fn get_size(&self) -> u64 {
+    fn box_size(&self) -> u64 {
         let mut size = HEADER_SIZE;
         if let Some(ref elst) = self.elst {
             size += elst.box_size();
         }
         size
-    }
-}
-
-impl Mp4Box for EdtsBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
-    fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = String::new();
-        Ok(s)
     }
 }
 
@@ -55,9 +37,12 @@ impl<R: Read + Seek> ReadBox<&mut R> for EdtsBox {
         let header = BoxHeader::read(reader)?;
         let BoxHeader { name, size: s } = header;
 
-        if let BoxType::ElstBox = name {
-            let elst = ElstBox::read_box(reader, s)?;
-            edts.elst = Some(elst);
+        match name {
+            BoxType::ElstBox => {
+                let elst = ElstBox::read_box(reader, s)?;
+                edts.elst = Some(elst);
+            }
+            _ => {}
         }
 
         skip_bytes_to(reader, start + size)?;
@@ -69,7 +54,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for EdtsBox {
 impl<W: Write> WriteBox<&mut W> for EdtsBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         if let Some(ref elst) = self.elst {
             elst.write_box(writer)?;

@@ -1,4 +1,3 @@
-use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::mp4box::*;
@@ -7,32 +6,24 @@ use crate::mp4box::{
     stsz::StszBox, stts::SttsBox,
 };
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct StblBox {
     pub stsd: StsdBox,
     pub stts: SttsBox,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub ctts: Option<CttsBox>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stss: Option<StssBox>,
     pub stsc: StscBox,
     pub stsz: StszBox,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub stco: Option<StcoBox>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub co64: Option<Co64Box>,
 }
 
-impl StblBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for StblBox {
+    fn box_type() -> BoxType {
         BoxType::StblBox
     }
 
-    pub fn get_size(&self) -> u64 {
+    fn box_size(&self) -> u64 {
         let mut size = HEADER_SIZE;
         size += self.stsd.box_size();
         size += self.stts.box_size();
@@ -51,25 +42,6 @@ impl StblBox {
             size += co64.box_size();
         }
         size
-    }
-}
-
-impl Mp4Box for StblBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
-    fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = String::new();
-        Ok(s)
     }
 }
 
@@ -147,12 +119,12 @@ impl<R: Read + Seek> ReadBox<&mut R> for StblBox {
         Ok(StblBox {
             stsd: stsd.unwrap(),
             stts: stts.unwrap(),
-            ctts,
-            stss,
+            ctts: ctts,
+            stss: stss,
             stsc: stsc.unwrap(),
             stsz: stsz.unwrap(),
-            stco,
-            co64,
+            stco: stco,
+            co64: co64,
         })
     }
 }
@@ -160,7 +132,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for StblBox {
 impl<W: Write> WriteBox<&mut W> for StblBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         self.stsd.write_box(writer)?;
         self.stts.write_box(writer)?;

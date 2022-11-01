@@ -1,25 +1,21 @@
-use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::mp4box::*;
 use crate::mp4box::{edts::EdtsBox, mdia::MdiaBox, tkhd::TkhdBox};
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TrakBox {
     pub tkhd: TkhdBox,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub edts: Option<EdtsBox>,
-
     pub mdia: MdiaBox,
 }
 
-impl TrakBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for TrakBox {
+    fn box_type() -> BoxType {
         BoxType::TrakBox
     }
 
-    pub fn get_size(&self) -> u64 {
+    fn box_size(&self) -> u64 {
         let mut size = HEADER_SIZE;
         size += self.tkhd.box_size();
         if let Some(ref edts) = self.edts {
@@ -27,25 +23,6 @@ impl TrakBox {
         }
         size += self.mdia.box_size();
         size
-    }
-}
-
-impl Mp4Box for TrakBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
-    fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = String::new();
-        Ok(s)
     }
 }
 
@@ -103,7 +80,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for TrakBox {
 impl<W: Write> WriteBox<&mut W> for TrakBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         self.tkhd.write_box(writer)?;
         if let Some(ref edts) = self.edts {

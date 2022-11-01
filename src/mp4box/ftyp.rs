@@ -1,51 +1,22 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct FtypBox {
     pub major_brand: FourCC,
     pub minor_version: u32,
     pub compatible_brands: Vec<FourCC>,
 }
 
-impl FtypBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for FtypBox {
+    fn box_type() -> BoxType {
         BoxType::FtypBox
     }
 
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + 8 + (4 * self.compatible_brands.len() as u64)
-    }
-}
-
-impl Mp4Box for FtypBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let mut compatible_brands = Vec::new();
-        for brand in self.compatible_brands.iter() {
-            compatible_brands.push(brand.to_string());
-        }
-        let s = format!(
-            "major_brand={} minor_version={} compatible_brands={}",
-            self.major_brand,
-            self.minor_version,
-            compatible_brands.join("-")
-        );
-        Ok(s)
+        HEADER_SIZE + 8 + (4 * self.compatible_brands.len() as u64)
     }
 }
 
@@ -79,7 +50,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for FtypBox {
 impl<W: Write> WriteBox<&mut W> for FtypBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         writer.write_u32::<BigEndian>((&self.major_brand).into())?;
         writer.write_u32::<BigEndian>(self.minor_version)?;
@@ -99,13 +70,23 @@ mod tests {
     #[test]
     fn test_ftyp() {
         let src_box = FtypBox {
-            major_brand: str::parse("isom").unwrap(),
+            major_brand: FourCC {
+                value: String::from("isom"),
+            },
             minor_version: 0,
             compatible_brands: vec![
-                str::parse("isom").unwrap(),
-                str::parse("iso2").unwrap(),
-                str::parse("avc1").unwrap(),
-                str::parse("mp41").unwrap(),
+                FourCC {
+                    value: String::from("isom"),
+                },
+                FourCC {
+                    value: String::from("iso2"),
+                },
+                FourCC {
+                    value: String::from("avc1"),
+                },
+                FourCC {
+                    value: String::from("mp41"),
+                },
             ],
         };
         let mut buf = Vec::new();

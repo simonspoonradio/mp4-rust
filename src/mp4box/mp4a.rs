@@ -1,18 +1,15 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Mp4aBox {
     pub data_reference_index: u16,
     pub channelcount: u16,
     pub samplesize: u16,
-
-    #[serde(with = "value_u32")]
     pub samplerate: FixedPointU16,
-    pub esds: Option<EsdsBox>,
+    pub esds: EsdsBox,
 }
 
 impl Default for Mp4aBox {
@@ -22,7 +19,7 @@ impl Default for Mp4aBox {
             channelcount: 2,
             samplesize: 16,
             samplerate: FixedPointU16::new(48000),
-            esds: Some(EsdsBox::default()),
+            esds: EsdsBox::default(),
         }
     }
 }
@@ -34,44 +31,18 @@ impl Mp4aBox {
             channelcount: config.chan_conf as u16,
             samplesize: 16,
             samplerate: FixedPointU16::new(config.freq_index.freq() as u16),
-            esds: Some(EsdsBox::new(config)),
+            esds: EsdsBox::new(config),
         }
-    }
-
-    pub fn get_type(&self) -> BoxType {
-        BoxType::Mp4aBox
-    }
-
-    pub fn get_size(&self) -> u64 {
-        let mut size = HEADER_SIZE + 8 + 20;
-        if let Some(ref esds) = self.esds {
-            size += esds.box_size();
-        }
-        size
     }
 }
 
 impl Mp4Box for Mp4aBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
+    fn box_type() -> BoxType {
+        BoxType::Mp4aBox
     }
 
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!(
-            "channel_count={} sample_size={} sample_rate={}",
-            self.channelcount,
-            self.samplesize,
-            self.samplerate.value()
-        );
-        Ok(s)
+        HEADER_SIZE + 8 + 20 + self.esds.box_size()
     }
 }
 
@@ -89,32 +60,30 @@ impl<R: Read + Seek> ReadBox<&mut R> for Mp4aBox {
         reader.read_u32::<BigEndian>()?; // pre-defined, reserved
         let samplerate = FixedPointU16::new_raw(reader.read_u32::<BigEndian>()?);
 
-        let mut esds = None;
-        let current = reader.seek(SeekFrom::Current(0))?;
-        if current < start + size {
-            let header = BoxHeader::read(reader)?;
-            let BoxHeader { name, size: s } = header;
+        let header = BoxHeader::read(reader)?;
+        let BoxHeader { name, size: s } = header;
+        if name == BoxType::EsdsBox {
+            let esds = EsdsBox::read_box(reader, s)?;
 
-            if name == BoxType::EsdsBox {
-                esds = Some(EsdsBox::read_box(reader, s)?);
-            }
             skip_bytes_to(reader, start + size)?;
-        }
 
-        Ok(Mp4aBox {
-            data_reference_index,
-            channelcount,
-            samplesize,
-            samplerate,
-            esds,
-        })
+            Ok(Mp4aBox {
+                data_reference_index,
+                channelcount,
+                samplesize,
+                samplerate,
+                esds,
+            })
+        } else {
+            Err(Error::InvalidData("esds not found"))
+        }
     }
 }
 
 impl<W: Write> WriteBox<&mut W> for Mp4aBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         writer.write_u32::<BigEndian>(0)?; // reserved
         writer.write_u16::<BigEndian>(0)?; // reserved
@@ -126,15 +95,13 @@ impl<W: Write> WriteBox<&mut W> for Mp4aBox {
         writer.write_u32::<BigEndian>(0)?; // reserved
         writer.write_u32::<BigEndian>(self.samplerate.raw_value())?;
 
-        if let Some(ref esds) = self.esds {
-            esds.write_box(writer)?;
-        }
+        self.esds.write_box(writer)?;
 
         Ok(size)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct EsdsBox {
     pub version: u8,
     pub flags: u32,
@@ -152,24 +119,12 @@ impl EsdsBox {
 }
 
 impl Mp4Box for EsdsBox {
-    fn box_type(&self) -> BoxType {
+    fn box_type() -> BoxType {
         BoxType::EsdsBox
     }
 
     fn box_size(&self) -> u64 {
-        HEADER_SIZE
-            + HEADER_EXT_SIZE
-            + 1
-            + size_of_length(ESDescriptor::desc_size()) as u64
-            + ESDescriptor::desc_size() as u64
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        Ok(String::new())
+        HEADER_SIZE + HEADER_EXT_SIZE + 5 + ESDescriptor::desc_size() as u64  // XXX desc_size < 0x80
     }
 }
 
@@ -211,7 +166,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for EsdsBox {
 impl<W: Write> WriteBox<&mut W> for EsdsBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
@@ -249,15 +204,6 @@ fn read_desc<R: Read>(reader: &mut R) -> Result<(u8, u32)> {
     Ok((tag, size))
 }
 
-fn size_of_length(size: u32) -> u32 {
-    match size {
-        0x0..=0x7F => 1,
-        0x80..=0x3FFF => 2,
-        0x4000..=0x1FFFFF => 3,
-        _ => 4,
-    }
-}
-
 fn write_desc<W: Write>(writer: &mut W, tag: u8, size: u32) -> Result<u64> {
     writer.write_u8(tag)?;
 
@@ -265,7 +211,13 @@ fn write_desc<W: Write>(writer: &mut W, tag: u8, size: u32) -> Result<u64> {
         return Err(Error::InvalidData("invalid descriptor length range"));
     }
 
-    let nbytes = size_of_length(size);
+    // let nbytes = match size {
+    //     0x0..=0x7F => 1,
+    //     0x80..=0x3FFF => 2,
+    //     0x4000..=0x1FFFFF => 3,
+    //     _ => 4,
+    // };
+    let nbytes = 4;
 
     for i in 0..nbytes {
         let mut b = (size >> ((nbytes - i - 1) * 7)) as u8 & 0x7F;
@@ -275,10 +227,10 @@ fn write_desc<W: Write>(writer: &mut W, tag: u8, size: u32) -> Result<u64> {
         writer.write_u8(b)?;
     }
 
-    Ok(1 + nbytes as u64)
+    Ok(1 + 4)
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ESDescriptor {
     pub es_id: u16,
 
@@ -301,13 +253,9 @@ impl Descriptor for ESDescriptor {
         0x03
     }
 
+    // XXX size < 0x80
     fn desc_size() -> u32 {
-        3 + 1
-            + size_of_length(DecoderConfigDescriptor::desc_size())
-            + DecoderConfigDescriptor::desc_size()
-            + 1
-            + size_of_length(SLConfigDescriptor::desc_size())
-            + SLConfigDescriptor::desc_size()
+        3 + 5 + DecoderConfigDescriptor::desc_size() + 5 + SLConfigDescriptor::desc_size()
     }
 }
 
@@ -339,10 +287,14 @@ impl<R: Read + Seek> ReadDesc<&mut R> for ESDescriptor {
             current = reader.seek(SeekFrom::Current(0))?;
         }
 
+        if dec_config.is_none() {
+            return Err(Error::InvalidData("DecoderConfigDescriptor not found"));
+        }
+
         Ok(ESDescriptor {
             es_id,
-            dec_config: dec_config.unwrap_or_default(),
-            sl_config: sl_config.unwrap_or_default(),
+            dec_config: dec_config.unwrap(),
+            sl_config: sl_config.unwrap_or(SLConfigDescriptor::default()),
         })
     }
 }
@@ -362,7 +314,7 @@ impl<W: Write> WriteDesc<&mut W> for ESDescriptor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct DecoderConfigDescriptor {
     pub object_type_indication: u8,
     pub stream_type: u8,
@@ -393,10 +345,9 @@ impl Descriptor for DecoderConfigDescriptor {
         0x04
     }
 
+    // XXX size < 0x80
     fn desc_size() -> u32 {
-        13 + 1
-            + size_of_length(DecoderSpecificDescriptor::desc_size())
-            + DecoderSpecificDescriptor::desc_size()
+        13 + 5 + DecoderSpecificDescriptor::desc_size()
     }
 }
 
@@ -429,6 +380,10 @@ impl<R: Read + Seek> ReadDesc<&mut R> for DecoderConfigDescriptor {
             current = reader.seek(SeekFrom::Current(0))?;
         }
 
+        if dec_specific.is_none() {
+            return Err(Error::InvalidData("DecoderSpecificDescriptor not found"));
+        }
+
         Ok(DecoderConfigDescriptor {
             object_type_indication,
             stream_type,
@@ -436,7 +391,7 @@ impl<R: Read + Seek> ReadDesc<&mut R> for DecoderConfigDescriptor {
             buffer_size_db,
             max_bitrate,
             avg_bitrate,
-            dec_specific: dec_specific.unwrap_or_default(),
+            dec_specific: dec_specific.unwrap(),
         })
     }
 }
@@ -458,7 +413,7 @@ impl<W: Write> WriteDesc<&mut W> for DecoderConfigDescriptor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct DecoderSpecificDescriptor {
     pub profile: u8,
     pub freq_index: u8,
@@ -485,50 +440,13 @@ impl Descriptor for DecoderSpecificDescriptor {
     }
 }
 
-fn get_audio_object_type(byte_a: u8, byte_b: u8) -> u8 {
-    let mut profile = byte_a >> 3;
-    if profile == 31 {
-        profile = 32 + ((byte_a & 7) | (byte_b >> 5));
-    }
-
-    profile
-}
-
-fn get_chan_conf<R: Read + Seek>(
-    reader: &mut R,
-    byte_b: u8,
-    freq_index: u8,
-    extended_profile: bool,
-) -> Result<u8> {
-    let chan_conf;
-    if freq_index == 15 {
-        // Skip the 24 bit sample rate
-        let sample_rate = reader.read_u24::<BigEndian>()?;
-        chan_conf = ((sample_rate >> 4) & 0x0F) as u8;
-    } else if extended_profile {
-        let byte_c = reader.read_u8()?;
-        chan_conf = (byte_b & 1) | (byte_c & 0xE0);
-    } else {
-        chan_conf = (byte_b >> 3) & 0x0F;
-    }
-
-    Ok(chan_conf)
-}
-
 impl<R: Read + Seek> ReadDesc<&mut R> for DecoderSpecificDescriptor {
     fn read_desc(reader: &mut R, _size: u32) -> Result<Self> {
         let byte_a = reader.read_u8()?;
         let byte_b = reader.read_u8()?;
-        let profile = get_audio_object_type(byte_a, byte_b);
-        let freq_index;
-        let chan_conf;
-        if profile > 31 {
-            freq_index = (byte_b >> 1) & 0x0F;
-            chan_conf = get_chan_conf(reader, byte_b, freq_index, true)?;
-        } else {
-            freq_index = ((byte_a & 0x07) << 1) + (byte_b >> 7);
-            chan_conf = get_chan_conf(reader, byte_b, freq_index, false)?;
-        }
+        let profile = byte_a >> 3;
+        let freq_index = ((byte_a & 0x07) << 1) + (byte_b >> 7);
+        let chan_conf = (byte_b >> 3) & 0x0F;
 
         Ok(DecoderSpecificDescriptor {
             profile,
@@ -550,7 +468,7 @@ impl<W: Write> WriteDesc<&mut W> for DecoderSpecificDescriptor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SLConfigDescriptor {}
 
 impl SLConfigDescriptor {
@@ -580,7 +498,7 @@ impl<R: Read + Seek> ReadDesc<&mut R> for SLConfigDescriptor {
 impl<W: Write> WriteDesc<&mut W> for SLConfigDescriptor {
     fn write_desc(&self, writer: &mut W) -> Result<u32> {
         let size = Self::desc_size();
-        write_desc(writer, Self::desc_tag(), size - 1)?;
+        write_desc(writer, Self::desc_tag(), size)?;
 
         writer.write_u8(0)?; // pre-defined
         Ok(size)
@@ -600,7 +518,7 @@ mod tests {
             channelcount: 2,
             samplesize: 16,
             samplerate: FixedPointU16::new(48000),
-            esds: Some(EsdsBox {
+            esds: EsdsBox {
                 version: 0,
                 flags: 0,
                 es_desc: ESDescriptor {
@@ -620,29 +538,7 @@ mod tests {
                     },
                     sl_config: SLConfigDescriptor::default(),
                 },
-            }),
-        };
-        let mut buf = Vec::new();
-        src_box.write_box(&mut buf).unwrap();
-        assert_eq!(buf.len(), src_box.box_size() as usize);
-
-        let mut reader = Cursor::new(&buf);
-        let header = BoxHeader::read(&mut reader).unwrap();
-        assert_eq!(header.name, BoxType::Mp4aBox);
-        assert_eq!(src_box.box_size(), header.size);
-
-        let dst_box = Mp4aBox::read_box(&mut reader, header.size).unwrap();
-        assert_eq!(src_box, dst_box);
-    }
-
-    #[test]
-    fn test_mp4a_no_esds() {
-        let src_box = Mp4aBox {
-            data_reference_index: 1,
-            channelcount: 2,
-            samplesize: 16,
-            samplerate: FixedPointU16::new(48000),
-            esds: None,
+            },
         };
         let mut buf = Vec::new();
         src_box.write_box(&mut buf).unwrap();

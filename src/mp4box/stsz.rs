@@ -1,51 +1,24 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct StszBox {
     pub version: u8,
     pub flags: u32,
     pub sample_size: u32,
     pub sample_count: u32,
-
-    #[serde(skip_serializing)]
     pub sample_sizes: Vec<u32>,
 }
 
-impl StszBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for StszBox {
+    fn box_type() -> BoxType {
         BoxType::StszBox
     }
 
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + HEADER_EXT_SIZE + 8 + (4 * self.sample_sizes.len() as u64)
-    }
-}
-
-impl Mp4Box for StszBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!(
-            "sample_size={} sample_count={} sample_sizes={}",
-            self.sample_size,
-            self.sample_count,
-            self.sample_sizes.len()
-        );
-        Ok(s)
+        HEADER_SIZE + HEADER_EXT_SIZE + 8 + (4 * self.sample_sizes.len() as u64)
     }
 }
 
@@ -80,16 +53,14 @@ impl<R: Read + Seek> ReadBox<&mut R> for StszBox {
 impl<W: Write> WriteBox<&mut W> for StszBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
         writer.write_u32::<BigEndian>(self.sample_size)?;
         writer.write_u32::<BigEndian>(self.sample_count)?;
         if self.sample_size == 0 {
-            if self.sample_count != self.sample_sizes.len() as u32 {
-                return Err(Error::InvalidData("sample count out of sync"));
-            }
+            assert_eq!(self.sample_count, self.sample_sizes.len() as u32);
             for sample_number in self.sample_sizes.iter() {
                 writer.write_u32::<BigEndian>(*sample_number)?;
             }

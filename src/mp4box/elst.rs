@@ -1,19 +1,16 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ElstBox {
     pub version: u8,
     pub flags: u32,
-
-    #[serde(skip_serializing)]
     pub entries: Vec<ElstEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ElstEntry {
     pub segment_duration: u64,
     pub media_time: u64,
@@ -21,38 +18,20 @@ pub struct ElstEntry {
     pub media_rate_fraction: u16,
 }
 
-impl ElstBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for ElstBox {
+    fn box_type() -> BoxType {
         BoxType::ElstBox
     }
 
-    pub fn get_size(&self) -> u64 {
+    fn box_size(&self) -> u64 {
         let mut size = HEADER_SIZE + HEADER_EXT_SIZE + 4;
         if self.version == 1 {
             size += self.entries.len() as u64 * 20;
-        } else if self.version == 0 {
+        } else {
+            assert_eq!(self.version, 0);
             size += self.entries.len() as u64 * 12;
         }
         size
-    }
-}
-
-impl Mp4Box for ElstBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
-    fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!("elst_entries={}", self.entries.len());
-        Ok(s)
     }
 }
 
@@ -99,7 +78,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for ElstBox {
 impl<W: Write> WriteBox<&mut W> for ElstBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 

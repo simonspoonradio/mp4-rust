@@ -1,11 +1,10 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::char::{decode_utf16, REPLACEMENT_CHARACTER};
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MdhdBox {
     pub version: u8,
     pub flags: u32,
@@ -14,24 +13,6 @@ pub struct MdhdBox {
     pub timescale: u32,
     pub duration: u64,
     pub language: String,
-}
-
-impl MdhdBox {
-    pub fn get_type(&self) -> BoxType {
-        BoxType::MdhdBox
-    }
-
-    pub fn get_size(&self) -> u64 {
-        let mut size = HEADER_SIZE + HEADER_EXT_SIZE;
-
-        if self.version == 1 {
-            size += 28;
-        } else if self.version == 0 {
-            size += 16;
-        }
-        size += 4;
-        size
-    }
 }
 
 impl Default for MdhdBox {
@@ -49,24 +30,21 @@ impl Default for MdhdBox {
 }
 
 impl Mp4Box for MdhdBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
+    fn box_type() -> BoxType {
+        BoxType::MdhdBox
     }
 
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
+        let mut size = HEADER_SIZE + HEADER_EXT_SIZE;
 
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!(
-            "creation_time={} timescale={} duration={} language={}",
-            self.creation_time, self.timescale, self.duration, self.language
-        );
-        Ok(s)
+        if self.version == 1 {
+            size += 28;
+        } else {
+            assert_eq!(self.version, 0);
+            size += 16;
+        }
+        size += 4;
+        size
     }
 }
 
@@ -83,15 +61,14 @@ impl<R: Read + Seek> ReadBox<&mut R> for MdhdBox {
                 reader.read_u32::<BigEndian>()?,
                 reader.read_u64::<BigEndian>()?,
             )
-        } else if version == 0 {
+        } else {
+            assert_eq!(version, 0);
             (
                 reader.read_u32::<BigEndian>()? as u64,
                 reader.read_u32::<BigEndian>()? as u64,
                 reader.read_u32::<BigEndian>()?,
                 reader.read_u32::<BigEndian>()? as u64,
             )
-        } else {
-            return Err(Error::InvalidData("version must be 0 or 1"));
         };
         let language_code = reader.read_u16::<BigEndian>()?;
         let language = language_string(language_code);
@@ -113,7 +90,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MdhdBox {
 impl<W: Write> WriteBox<&mut W> for MdhdBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
@@ -122,13 +99,12 @@ impl<W: Write> WriteBox<&mut W> for MdhdBox {
             writer.write_u64::<BigEndian>(self.modification_time)?;
             writer.write_u32::<BigEndian>(self.timescale)?;
             writer.write_u64::<BigEndian>(self.duration)?;
-        } else if self.version == 0 {
+        } else {
+            assert_eq!(self.version, 0);
             writer.write_u32::<BigEndian>(self.creation_time as u32)?;
             writer.write_u32::<BigEndian>(self.modification_time as u32)?;
             writer.write_u32::<BigEndian>(self.timescale)?;
             writer.write_u32::<BigEndian>(self.duration as u32)?;
-        } else {
-            return Err(Error::InvalidData("version must be 0 or 1"));
         }
 
         let language_code = language_code(&self.language);
@@ -151,7 +127,7 @@ fn language_string(language: u16) -> String {
         .map(|r| r.unwrap_or(REPLACEMENT_CHARACTER))
         .collect::<String>();
 
-    lang_str
+    return lang_str;
 }
 
 fn language_code(language: &str) -> u16 {

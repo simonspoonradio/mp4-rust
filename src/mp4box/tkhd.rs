@@ -1,16 +1,9 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-pub enum TrackFlag {
-    TrackEnabled = 0x000001,
-    // TrackInMovie = 0x000002,
-    // TrackInPreview = 0x000004,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TkhdBox {
     pub version: u8,
     pub flags: u32,
@@ -20,15 +13,9 @@ pub struct TkhdBox {
     pub duration: u64,
     pub layer: u16,
     pub alternate_group: u16,
-
-    #[serde(with = "value_u8")]
     pub volume: FixedPointU8,
     pub matrix: Matrix,
-
-    #[serde(with = "value_u32")]
     pub width: FixedPointU16,
-
-    #[serde(with = "value_u32")]
     pub height: FixedPointU16,
 }
 
@@ -36,7 +23,7 @@ impl Default for TkhdBox {
     fn default() -> Self {
         TkhdBox {
             version: 0,
-            flags: TrackFlag::TrackEnabled as u32,
+            flags: 3, // XXX enum Track_enabled | Track_in_movie
             creation_time: 0,
             modification_time: 0,
             track_id: 0,
@@ -51,7 +38,7 @@ impl Default for TkhdBox {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Matrix {
     pub a: i32,
     pub b: i32,
@@ -64,49 +51,7 @@ pub struct Matrix {
     pub w: i32,
 }
 
-impl std::fmt::Display for Matrix {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}",
-            self.a, self.b, self.u, self.c, self.d, self.v, self.x, self.y, self.w
-        )
-    }
-}
-
-impl Default for Matrix {
-    fn default() -> Self {
-        Self {
-            // unity matrix according to ISO/IEC 14496-12:2005(E)
-            a: 0x00010000,
-            b: 0,
-            u: 0,
-            c: 0,
-            d: 0x00010000,
-            v: 0,
-            x: 0,
-            y: 0,
-            w: 0x40000000,
-        }
-    }
-}
-
 impl TkhdBox {
-    pub fn get_type(&self) -> BoxType {
-        BoxType::TkhdBox
-    }
-
-    pub fn get_size(&self) -> u64 {
-        let mut size = HEADER_SIZE + HEADER_EXT_SIZE;
-        if self.version == 1 {
-            size += 32;
-        } else if self.version == 0 {
-            size += 20;
-        }
-        size += 60;
-        size
-    }
-
     pub fn set_width(&mut self, width: u16) {
         self.width = FixedPointU16::new(width);
     }
@@ -117,31 +62,20 @@ impl TkhdBox {
 }
 
 impl Mp4Box for TkhdBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
+    fn box_type() -> BoxType {
+        BoxType::TkhdBox
     }
 
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!(
-            "creation_time={} track_id={} duration={} layer={} volume={} matrix={} width={} height={}",
-            self.creation_time,
-            self.track_id,
-            self.duration,
-            self.layer,
-            self.volume.value(),
-            self.matrix,
-            self.width.value(),
-            self.height.value()
-        );
-        Ok(s)
+        let mut size = HEADER_SIZE + HEADER_EXT_SIZE;
+        if self.version == 1 {
+            size += 32;
+        } else {
+            assert_eq!(self.version, 0);
+            size += 20;
+        }
+        size += 60;
+        size
     }
 }
 
@@ -159,7 +93,8 @@ impl<R: Read + Seek> ReadBox<&mut R> for TkhdBox {
                 reader.read_u32::<BigEndian>()?,
                 reader.read_u64::<BigEndian>()?,
             )
-        } else if version == 0 {
+        } else {
+            assert_eq!(version, 0);
             (
                 reader.read_u32::<BigEndian>()? as u64,
                 reader.read_u32::<BigEndian>()? as u64,
@@ -167,8 +102,6 @@ impl<R: Read + Seek> ReadBox<&mut R> for TkhdBox {
                 reader.read_u32::<BigEndian>()?,
                 reader.read_u32::<BigEndian>()? as u64,
             )
-        } else {
-            return Err(Error::InvalidData("version must be 0 or 1"));
         };
         reader.read_u64::<BigEndian>()?; // reserved
         let layer = reader.read_u16::<BigEndian>()?;
@@ -177,7 +110,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for TkhdBox {
 
         reader.read_u16::<BigEndian>()?; // reserved
         let matrix = Matrix {
-            a: reader.read_i32::<BigEndian>()?,
+            a: reader.read_i32::<byteorder::LittleEndian>()?,
             b: reader.read_i32::<BigEndian>()?,
             u: reader.read_i32::<BigEndian>()?,
             c: reader.read_i32::<BigEndian>()?,
@@ -213,7 +146,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for TkhdBox {
 impl<W: Write> WriteBox<&mut W> for TkhdBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
@@ -223,14 +156,13 @@ impl<W: Write> WriteBox<&mut W> for TkhdBox {
             writer.write_u32::<BigEndian>(self.track_id)?;
             writer.write_u32::<BigEndian>(0)?; // reserved
             writer.write_u64::<BigEndian>(self.duration)?;
-        } else if self.version == 0 {
+        } else {
+            assert_eq!(self.version, 0);
             writer.write_u32::<BigEndian>(self.creation_time as u32)?;
             writer.write_u32::<BigEndian>(self.modification_time as u32)?;
             writer.write_u32::<BigEndian>(self.track_id)?;
             writer.write_u32::<BigEndian>(0)?; // reserved
             writer.write_u32::<BigEndian>(self.duration as u32)?;
-        } else {
-            return Err(Error::InvalidData("version must be 0 or 1"));
         }
 
         writer.write_u64::<BigEndian>(0)?; // reserved
@@ -240,7 +172,7 @@ impl<W: Write> WriteBox<&mut W> for TkhdBox {
 
         writer.write_u16::<BigEndian>(0)?; // reserved
 
-        writer.write_i32::<BigEndian>(self.matrix.a)?;
+        writer.write_i32::<byteorder::LittleEndian>(self.matrix.a)?;
         writer.write_i32::<BigEndian>(self.matrix.b)?;
         writer.write_i32::<BigEndian>(self.matrix.u)?;
         writer.write_i32::<BigEndian>(self.matrix.c)?;
@@ -267,7 +199,7 @@ mod tests {
     fn test_tkhd32() {
         let src_box = TkhdBox {
             version: 0,
-            flags: TrackFlag::TrackEnabled as u32,
+            flags: 3, // XXX enum Track_enabled | Track_in_movie
             creation_time: 100,
             modification_time: 200,
             track_id: 1,
@@ -275,7 +207,17 @@ mod tests {
             layer: 0,
             alternate_group: 0,
             volume: FixedPointU8::new(1),
-            matrix: Matrix::default(),
+            matrix: Matrix {
+                a: 0x00010000,
+                b: 0,
+                u: 0,
+                c: 0,
+                d: 0x00010000,
+                v: 0,
+                x: 0,
+                y: 0,
+                w: 0x40000000,
+            },
             width: FixedPointU16::new(512),
             height: FixedPointU16::new(288),
         };
@@ -296,7 +238,7 @@ mod tests {
     fn test_tkhd64() {
         let src_box = TkhdBox {
             version: 1,
-            flags: TrackFlag::TrackEnabled as u32,
+            flags: 3, // XXX enum Track_enabled | Track_in_movie
             creation_time: 100,
             modification_time: 200,
             track_id: 1,
@@ -304,7 +246,17 @@ mod tests {
             layer: 0,
             alternate_group: 0,
             volume: FixedPointU8::new(1),
-            matrix: Matrix::default(),
+            matrix: Matrix {
+                a: 0x00010000,
+                b: 0,
+                u: 0,
+                c: 0,
+                d: 0x00010000,
+                v: 0,
+                x: 0,
+                y: 0,
+                w: 0x40000000,
+            },
             width: FixedPointU16::new(512),
             height: FixedPointU16::new(288),
         };

@@ -1,10 +1,9 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct HdlrBox {
     pub version: u8,
     pub flags: u32,
@@ -12,32 +11,13 @@ pub struct HdlrBox {
     pub name: String,
 }
 
-impl HdlrBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for HdlrBox {
+    fn box_type() -> BoxType {
         BoxType::HdlrBox
     }
 
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + HEADER_EXT_SIZE + 20 + self.name.len() as u64 + 1
-    }
-}
-
-impl Mp4Box for HdlrBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!("handler_type={} name={}", self.handler_type, self.name);
-        Ok(s)
+        HEADER_SIZE + HEADER_EXT_SIZE + 20 + self.name.len() as u64 + 1
     }
 }
 
@@ -58,9 +38,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for HdlrBox {
 
         let handler_string = match String::from_utf8(buf) {
             Ok(t) => {
-                if t.len() != buf_size as usize {
-                    return Err(Error::InvalidData("string too small"));
-                }
+                assert_eq!(t.len(), buf_size as usize);
                 t
             }
             _ => String::from("null"),
@@ -80,7 +58,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for HdlrBox {
 impl<W: Write> WriteBox<&mut W> for HdlrBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
@@ -92,7 +70,7 @@ impl<W: Write> WriteBox<&mut W> for HdlrBox {
             writer.write_u32::<BigEndian>(0)?;
         }
 
-        writer.write_all(self.name.as_bytes())?;
+        writer.write(self.name.as_bytes())?;
         writer.write_u8(0)?;
 
         Ok(size)
@@ -110,7 +88,7 @@ mod tests {
         let src_box = HdlrBox {
             version: 0,
             flags: 0,
-            handler_type: str::parse::<FourCC>("vide").unwrap(),
+            handler_type: FourCC::from("vide"),
             name: String::from("VideoHandler"),
         };
         let mut buf = Vec::new();

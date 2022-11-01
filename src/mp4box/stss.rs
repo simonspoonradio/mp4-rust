@@ -1,44 +1,22 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct StssBox {
     pub version: u8,
     pub flags: u32,
-
-    #[serde(skip_serializing)]
     pub entries: Vec<u32>,
 }
 
-impl StssBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for StssBox {
+    fn box_type() -> BoxType {
         BoxType::StssBox
     }
 
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + HEADER_EXT_SIZE + 4 + (4 * self.entries.len() as u64)
-    }
-}
-
-impl Mp4Box for StssBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!("entries={}", self.entries.len());
-        Ok(s)
+        HEADER_SIZE + HEADER_EXT_SIZE + 4 + (4 * self.entries.len() as u64)
     }
 }
 
@@ -68,7 +46,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for StssBox {
 impl<W: Write> WriteBox<&mut W> for StssBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 

@@ -1,10 +1,9 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MvhdBox {
     pub version: u8,
     pub flags: u32,
@@ -12,32 +11,7 @@ pub struct MvhdBox {
     pub modification_time: u64,
     pub timescale: u32,
     pub duration: u64,
-
-    #[serde(with = "value_u32")]
     pub rate: FixedPointU16,
-    #[serde(with = "value_u8")]
-    pub volume: FixedPointU8,
-
-    pub matrix: tkhd::Matrix,
-
-    pub next_track_id: u32,
-}
-
-impl MvhdBox {
-    pub fn get_type(&self) -> BoxType {
-        BoxType::MvhdBox
-    }
-
-    pub fn get_size(&self) -> u64 {
-        let mut size = HEADER_SIZE + HEADER_EXT_SIZE;
-        if self.version == 1 {
-            size += 28;
-        } else if self.version == 0 {
-            size += 16;
-        }
-        size += 80;
-        size
-    }
 }
 
 impl Default for MvhdBox {
@@ -50,38 +24,25 @@ impl Default for MvhdBox {
             timescale: 1000,
             duration: 0,
             rate: FixedPointU16::new(1),
-            matrix: tkhd::Matrix::default(),
-            volume: FixedPointU8::new(1),
-            next_track_id: 1,
         }
     }
 }
 
 impl Mp4Box for MvhdBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
+    fn box_type() -> BoxType {
+        BoxType::MvhdBox
     }
 
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!(
-            "creation_time={} timescale={} duration={} rate={} volume={}, matrix={}, next_track_id={}",
-            self.creation_time,
-            self.timescale,
-            self.duration,
-            self.rate.value(),
-            self.volume.value(),
-            self.matrix,
-            self.next_track_id
-        );
-        Ok(s)
+        let mut size = HEADER_SIZE + HEADER_EXT_SIZE;
+        if self.version == 1 {
+            size += 28;
+        } else {
+            assert_eq!(self.version, 0);
+            size += 16;
+        }
+        size += 80;
+        size
     }
 }
 
@@ -98,39 +59,16 @@ impl<R: Read + Seek> ReadBox<&mut R> for MvhdBox {
                 reader.read_u32::<BigEndian>()?,
                 reader.read_u64::<BigEndian>()?,
             )
-        } else if version == 0 {
+        } else {
+            assert_eq!(version, 0);
             (
                 reader.read_u32::<BigEndian>()? as u64,
                 reader.read_u32::<BigEndian>()? as u64,
                 reader.read_u32::<BigEndian>()?,
                 reader.read_u32::<BigEndian>()? as u64,
             )
-        } else {
-            return Err(Error::InvalidData("version must be 0 or 1"));
         };
         let rate = FixedPointU16::new_raw(reader.read_u32::<BigEndian>()?);
-
-        let volume = FixedPointU8::new_raw(reader.read_u16::<BigEndian>()?);
-
-        reader.read_u16::<BigEndian>()?; // reserved = 0
-
-        reader.read_u64::<BigEndian>()?; // reserved = 0
-
-        let matrix = tkhd::Matrix {
-            a: reader.read_i32::<BigEndian>()?,
-            b: reader.read_i32::<BigEndian>()?,
-            u: reader.read_i32::<BigEndian>()?,
-            c: reader.read_i32::<BigEndian>()?,
-            d: reader.read_i32::<BigEndian>()?,
-            v: reader.read_i32::<BigEndian>()?,
-            x: reader.read_i32::<BigEndian>()?,
-            y: reader.read_i32::<BigEndian>()?,
-            w: reader.read_i32::<BigEndian>()?,
-        };
-
-        skip_bytes(reader, 24)?; // pre_defined = 0
-
-        let next_track_id = reader.read_u32::<BigEndian>()?;
 
         skip_bytes_to(reader, start + size)?;
 
@@ -142,9 +80,6 @@ impl<R: Read + Seek> ReadBox<&mut R> for MvhdBox {
             timescale,
             duration,
             rate,
-            volume,
-            matrix,
-            next_track_id,
         })
     }
 }
@@ -152,7 +87,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MvhdBox {
 impl<W: Write> WriteBox<&mut W> for MvhdBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
@@ -161,35 +96,17 @@ impl<W: Write> WriteBox<&mut W> for MvhdBox {
             writer.write_u64::<BigEndian>(self.modification_time)?;
             writer.write_u32::<BigEndian>(self.timescale)?;
             writer.write_u64::<BigEndian>(self.duration)?;
-        } else if self.version == 0 {
+        } else {
+            assert_eq!(self.version, 0);
             writer.write_u32::<BigEndian>(self.creation_time as u32)?;
             writer.write_u32::<BigEndian>(self.modification_time as u32)?;
             writer.write_u32::<BigEndian>(self.timescale)?;
             writer.write_u32::<BigEndian>(self.duration as u32)?;
-        } else {
-            return Err(Error::InvalidData("version must be 0 or 1"));
         }
         writer.write_u32::<BigEndian>(self.rate.raw_value())?;
 
-        writer.write_u16::<BigEndian>(self.volume.raw_value())?;
-
-        writer.write_u16::<BigEndian>(0)?; // reserved = 0
-
-        writer.write_u64::<BigEndian>(0)?; // reserved = 0
-
-        writer.write_i32::<BigEndian>(self.matrix.a)?;
-        writer.write_i32::<BigEndian>(self.matrix.b)?;
-        writer.write_i32::<BigEndian>(self.matrix.u)?;
-        writer.write_i32::<BigEndian>(self.matrix.c)?;
-        writer.write_i32::<BigEndian>(self.matrix.d)?;
-        writer.write_i32::<BigEndian>(self.matrix.v)?;
-        writer.write_i32::<BigEndian>(self.matrix.x)?;
-        writer.write_i32::<BigEndian>(self.matrix.y)?;
-        writer.write_i32::<BigEndian>(self.matrix.w)?;
-
-        write_zeros(writer, 24)?; // pre_defined = 0
-
-        writer.write_u32::<BigEndian>(self.next_track_id)?;
+        // XXX volume, ...
+        write_zeros(writer, 76)?;
 
         Ok(size)
     }
@@ -211,9 +128,6 @@ mod tests {
             timescale: 1000,
             duration: 634634,
             rate: FixedPointU16::new(1),
-            volume: FixedPointU8::new(1),
-            matrix: tkhd::Matrix::default(),
-            next_track_id: 1,
         };
         let mut buf = Vec::new();
         src_box.write_box(&mut buf).unwrap();
@@ -238,9 +152,6 @@ mod tests {
             timescale: 1000,
             duration: 634634,
             rate: FixedPointU16::new(1),
-            volume: FixedPointU8::new(1),
-            matrix: tkhd::Matrix::default(),
-            next_track_id: 1,
         };
         let mut buf = Vec::new();
         src_box.write_box(&mut buf).unwrap();

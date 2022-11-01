@@ -1,44 +1,22 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct StcoBox {
     pub version: u8,
     pub flags: u32,
-
-    #[serde(skip_serializing)]
     pub entries: Vec<u32>,
 }
 
-impl StcoBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for StcoBox {
+    fn box_type() -> BoxType {
         BoxType::StcoBox
     }
 
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + HEADER_EXT_SIZE + 4 + (4 * self.entries.len() as u64)
-    }
-}
-
-impl Mp4Box for StcoBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!("entries={}", self.entries.len());
-        Ok(s)
+        HEADER_SIZE + HEADER_EXT_SIZE + 4 + (4 * self.entries.len() as u64)
     }
 }
 
@@ -68,7 +46,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for StcoBox {
 impl<W: Write> WriteBox<&mut W> for StcoBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
@@ -78,24 +56,6 @@ impl<W: Write> WriteBox<&mut W> for StcoBox {
         }
 
         Ok(size)
-    }
-}
-
-impl std::convert::TryFrom<&co64::Co64Box> for StcoBox {
-    type Error = std::num::TryFromIntError;
-
-    fn try_from(co64: &co64::Co64Box) -> std::result::Result<Self, Self::Error> {
-        let entries = co64
-            .entries
-            .iter()
-            .copied()
-            .map(u32::try_from)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(Self {
-            version: 0,
-            flags: 0,
-            entries,
-        })
     }
 }
 

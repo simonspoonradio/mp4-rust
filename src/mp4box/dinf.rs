@@ -1,39 +1,19 @@
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct DinfBox {
     dref: DrefBox,
 }
 
-impl DinfBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for DinfBox {
+    fn box_type() -> BoxType {
         BoxType::DinfBox
     }
 
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + self.dref.box_size()
-    }
-}
-
-impl Mp4Box for DinfBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = String::new();
-        Ok(s)
+        HEADER_SIZE + self.dref.box_size()
     }
 }
 
@@ -78,61 +58,26 @@ impl<R: Read + Seek> ReadBox<&mut R> for DinfBox {
 impl<W: Write> WriteBox<&mut W> for DinfBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
         self.dref.write_box(writer)?;
         Ok(size)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct DrefBox {
     pub version: u8,
     pub flags: u32,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<UrlBox>,
-}
-
-impl Default for DrefBox {
-    fn default() -> Self {
-        DrefBox {
-            version: 0,
-            flags: 0,
-            url: Some(UrlBox::default()),
-        }
-    }
-}
-
-impl DrefBox {
-    pub fn get_type(&self) -> BoxType {
-        BoxType::DrefBox
-    }
-
-    pub fn get_size(&self) -> u64 {
-        let mut size = HEADER_SIZE + HEADER_EXT_SIZE + 4;
-        if let Some(ref url) = self.url {
-            size += url.box_size();
-        }
-        size
-    }
+    pub url: UrlBox,
 }
 
 impl Mp4Box for DrefBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
+    fn box_type() -> BoxType {
+        BoxType::DrefBox
     }
 
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = String::new();
-        Ok(s)
+        HEADER_SIZE + HEADER_EXT_SIZE + 4 + self.url.box_size()
     }
 }
 
@@ -159,7 +104,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for DrefBox {
 
             match name {
                 BoxType::UrlBox => {
-                    url = Some(UrlBox::read_box(reader, s)?);
+                   url = Some(UrlBox::read_box(reader, s)?);
                 }
                 _ => {
                     skip_box(reader, s)?;
@@ -169,12 +114,16 @@ impl<R: Read + Seek> ReadBox<&mut R> for DrefBox {
             current = reader.seek(SeekFrom::Current(0))?;
         }
 
+        if url.is_none() {
+            return Err(Error::BoxNotFound(BoxType::UrlBox));
+        }
+
         skip_bytes_to(reader, start + size)?;
 
         Ok(DrefBox {
             version,
             flags,
-            url,
+            url: url.unwrap(),
         })
     }
 }
@@ -182,21 +131,18 @@ impl<R: Read + Seek> ReadBox<&mut R> for DrefBox {
 impl<W: Write> WriteBox<&mut W> for DrefBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
         writer.write_u32::<BigEndian>(1)?;
-
-        if let Some(ref url) = self.url {
-            url.write_box(writer)?;
-        }
+        self.url.write_box(writer)?;
 
         Ok(size)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UrlBox {
     pub version: u8,
     pub flags: u32,
@@ -213,38 +159,19 @@ impl Default for UrlBox {
     }
 }
 
-impl UrlBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for UrlBox {
+    fn box_type() -> BoxType {
         BoxType::UrlBox
     }
 
-    pub fn get_size(&self) -> u64 {
+    fn box_size(&self) -> u64 {
         let mut size = HEADER_SIZE + HEADER_EXT_SIZE;
 
-        if !self.location.is_empty() {
+        if ! self.location.is_empty() {
             size += self.location.bytes().len() as u64 + 1;
         }
 
         size
-    }
-}
-
-impl Mp4Box for UrlBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
-    fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!("location={}", self.location);
-        Ok(s)
     }
 }
 
@@ -260,9 +187,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for UrlBox {
             reader.read_exact(&mut buf)?;
             match String::from_utf8(buf) {
                 Ok(t) => {
-                    if t.len() != buf_size as usize {
-                        return Err(Error::InvalidData("string too small"));
-                    }
+                    assert_eq!(t.len(), buf_size as usize);
                     t
                 }
                 _ => String::default(),
@@ -284,12 +209,12 @@ impl<R: Read + Seek> ReadBox<&mut R> for UrlBox {
 impl<W: Write> WriteBox<&mut W> for UrlBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         write_box_header_ext(writer, self.version, self.flags)?;
 
-        if !self.location.is_empty() {
-            writer.write_all(self.location.as_bytes())?;
+        if ! self.location.is_empty() {
+            writer.write(self.location.as_bytes())?;
             writer.write_u8(0)?;
         }
 

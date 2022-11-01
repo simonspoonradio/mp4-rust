@@ -1,42 +1,22 @@
-use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::mp4box::*;
 use crate::mp4box::{hdlr::HdlrBox, mdhd::MdhdBox, minf::MinfBox};
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct MdiaBox {
     pub mdhd: MdhdBox,
     pub hdlr: HdlrBox,
     pub minf: MinfBox,
 }
 
-impl MdiaBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for MdiaBox {
+    fn box_type() -> BoxType {
         BoxType::MdiaBox
     }
 
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + self.mdhd.box_size() + self.hdlr.box_size() + self.minf.box_size()
-    }
-}
-
-impl Mp4Box for MdiaBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = String::new();
-        Ok(s)
+        HEADER_SIZE + self.mdhd.box_size() + self.hdlr.box_size() + self.minf.box_size()
     }
 }
 
@@ -97,7 +77,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MdiaBox {
 impl<W: Write> WriteBox<&mut W> for MdiaBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         self.mdhd.write_box(writer)?;
         self.hdlr.write_box(writer)?;

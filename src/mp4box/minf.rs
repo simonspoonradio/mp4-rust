@@ -1,27 +1,22 @@
-use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use crate::mp4box::*;
 use crate::mp4box::{dinf::DinfBox, smhd::SmhdBox, stbl::StblBox, vmhd::VmhdBox};
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct MinfBox {
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub vmhd: Option<VmhdBox>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub smhd: Option<SmhdBox>,
-
     pub dinf: DinfBox,
     pub stbl: StblBox,
 }
 
-impl MinfBox {
-    pub fn get_type(&self) -> BoxType {
+impl Mp4Box for MinfBox {
+    fn box_type() -> BoxType {
         BoxType::MinfBox
     }
 
-    pub fn get_size(&self) -> u64 {
+    fn box_size(&self) -> u64 {
         let mut size = HEADER_SIZE;
         if let Some(ref vmhd) = self.vmhd {
             size += vmhd.box_size();
@@ -35,32 +30,13 @@ impl MinfBox {
     }
 }
 
-impl Mp4Box for MinfBox {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
-    }
-
-    fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = String::new();
-        Ok(s)
-    }
-}
-
 impl<R: Read + Seek> ReadBox<&mut R> for MinfBox {
     fn read_box(reader: &mut R, size: u64) -> Result<Self> {
         let start = box_start(reader)?;
 
+        let mut dinf = None;
         let mut vmhd = None;
         let mut smhd = None;
-        let mut dinf = None;
         let mut stbl = None;
 
         let mut current = reader.seek(SeekFrom::Current(0))?;
@@ -113,7 +89,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for MinfBox {
 impl<W: Write> WriteBox<&mut W> for MinfBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         if let Some(ref vmhd) = self.vmhd {
             vmhd.write_box(writer)?;

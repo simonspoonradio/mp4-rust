@@ -1,19 +1,14 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use serde::Serialize;
 use std::io::{Read, Seek, Write};
 
 use crate::mp4box::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Avc1Box {
     pub data_reference_index: u16,
     pub width: u16,
     pub height: u16,
-
-    #[serde(with = "value_u32")]
     pub horizresolution: FixedPointU16,
-
-    #[serde(with = "value_u32")]
     pub vertresolution: FixedPointU16,
     pub frame_count: u16,
     pub depth: u16,
@@ -48,35 +43,15 @@ impl Avc1Box {
             avcc: AvcCBox::new(&config.seq_param_set, &config.pic_param_set),
         }
     }
-
-    pub fn get_type(&self) -> BoxType {
-        BoxType::Avc1Box
-    }
-
-    pub fn get_size(&self) -> u64 {
-        HEADER_SIZE + 8 + 70 + self.avcc.box_size()
-    }
 }
 
 impl Mp4Box for Avc1Box {
-    fn box_type(&self) -> BoxType {
-        self.get_type()
+    fn box_type() -> BoxType {
+        BoxType::Avc1Box
     }
 
     fn box_size(&self) -> u64 {
-        self.get_size()
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!(
-            "data_reference_index={} width={} height={} frame_count={}",
-            self.data_reference_index, self.width, self.height, self.frame_count
-        );
-        Ok(s)
+        HEADER_SIZE + 8 + 70 + self.avcc.box_size()
     }
 }
 
@@ -127,7 +102,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for Avc1Box {
 impl<W: Write> WriteBox<&mut W> for Avc1Box {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         writer.write_u32::<BigEndian>(0)?; // reserved
         writer.write_u16::<BigEndian>(0)?; // reserved
@@ -153,7 +128,7 @@ impl<W: Write> WriteBox<&mut W> for Avc1Box {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct AvcCBox {
     pub configuration_version: u8,
     pub avc_profile_indication: u8,
@@ -179,7 +154,7 @@ impl AvcCBox {
 }
 
 impl Mp4Box for AvcCBox {
-    fn box_type(&self) -> BoxType {
+    fn box_type() -> BoxType {
         BoxType::AvcCBox
     }
 
@@ -192,15 +167,6 @@ impl Mp4Box for AvcCBox {
             size += pps.size() as u64;
         }
         size
-    }
-
-    fn to_json(&self) -> Result<String> {
-        Ok(serde_json::to_string(&self).unwrap())
-    }
-
-    fn summary(&self) -> Result<String> {
-        let s = format!("avc_profile_indication={}", self.avc_profile_indication);
-        Ok(s)
     }
 }
 
@@ -243,7 +209,7 @@ impl<R: Read + Seek> ReadBox<&mut R> for AvcCBox {
 impl<W: Write> WriteBox<&mut W> for AvcCBox {
     fn write_box(&self, writer: &mut W) -> Result<u64> {
         let size = self.box_size();
-        BoxHeader::new(self.box_type(), size).write(writer)?;
+        BoxHeader::new(Self::box_type(), size).write(writer)?;
 
         writer.write_u8(self.configuration_version)?;
         writer.write_u8(self.avc_profile_indication)?;
@@ -262,7 +228,7 @@ impl<W: Write> WriteBox<&mut W> for AvcCBox {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct NalUnit {
     pub bytes: Vec<u8>,
 }
@@ -283,13 +249,13 @@ impl NalUnit {
     fn read<R: Read + Seek>(reader: &mut R) -> Result<Self> {
         let length = reader.read_u16::<BigEndian>()? as usize;
         let mut bytes = vec![0u8; length];
-        reader.read_exact(&mut bytes)?;
+        reader.read(&mut bytes)?;
         Ok(NalUnit { bytes })
     }
 
     fn write<W: Write>(&self, writer: &mut W) -> Result<u64> {
         writer.write_u16::<BigEndian>(self.bytes.len() as u16)?;
-        writer.write_all(&self.bytes)?;
+        writer.write(&self.bytes)?;
         Ok(self.size() as u64)
     }
 }

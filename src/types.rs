@@ -1,5 +1,3 @@
-use serde::Serialize;
-use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -9,7 +7,7 @@ use crate::*;
 pub use bytes::Bytes;
 pub use num_rational::Ratio;
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FixedPointU8(Ratio<u16>);
 
 impl FixedPointU8 {
@@ -30,7 +28,7 @@ impl FixedPointU8 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FixedPointI8(Ratio<i16>);
 
 impl FixedPointI8 {
@@ -51,7 +49,7 @@ impl FixedPointI8 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FixedPointU16(Ratio<u32>);
 
 impl FixedPointU16 {
@@ -74,42 +72,38 @@ impl FixedPointU16 {
 
 impl fmt::Debug for BoxType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let fourcc: FourCC = From::from(*self);
+        let fourcc: FourCC = From::from(self.clone());
         write!(f, "{}", fourcc)
     }
 }
 
 impl fmt::Display for BoxType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let fourcc: FourCC = From::from(*self);
+        let fourcc: FourCC = From::from(self.clone());
         write!(f, "{}", fourcc)
     }
 }
 
-#[derive(Default, PartialEq, Clone, Copy, Serialize)]
+#[derive(Default, PartialEq, Clone)]
 pub struct FourCC {
-    pub value: [u8; 4],
-}
-
-impl std::str::FromStr for FourCC {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        if let [a, b, c, d] = s.as_bytes() {
-            Ok(Self {
-                value: [*a, *b, *c, *d],
-            })
-        } else {
-            Err(Error::InvalidData("expected exactly four bytes in string"))
-        }
-    }
+    pub value: String,
 }
 
 impl From<u32> for FourCC {
     fn from(number: u32) -> Self {
-        FourCC {
-            value: number.to_be_bytes(),
+        let mut box_chars = Vec::new();
+        for x in 0..4 {
+            let c = (number >> (x * 8) & 0x0000_00FF) as u8;
+            box_chars.push(c);
         }
+        box_chars.reverse();
+
+        let box_string = match String::from_utf8(box_chars) {
+            Ok(t) => t,
+            _ => String::from("null"), // error to retrieve fourcc
+        };
+
+        FourCC { value: box_string }
     }
 }
 
@@ -121,12 +115,30 @@ impl From<FourCC> for u32 {
 
 impl From<&FourCC> for u32 {
     fn from(fourcc: &FourCC) -> u32 {
-        u32::from_be_bytes(fourcc.value)
+        let mut b: [u8; 4] = Default::default();
+        b.copy_from_slice(fourcc.value.as_bytes());
+        u32::from_be_bytes(b)
     }
 }
 
-impl From<[u8; 4]> for FourCC {
-    fn from(value: [u8; 4]) -> FourCC {
+impl From<String> for FourCC {
+    fn from(fourcc: String) -> FourCC {
+        let value = if fourcc.len() > 4 {
+            fourcc[0..4].to_string()
+        } else {
+            fourcc
+        };
+        FourCC { value }
+    }
+}
+
+impl From<&str> for FourCC {
+    fn from(fourcc: &str) -> FourCC {
+        let value = if fourcc.len() > 4 {
+            fourcc[0..4].to_string()
+        } else {
+            fourcc.to_string()
+        };
         FourCC { value }
     }
 }
@@ -141,35 +153,26 @@ impl From<BoxType> for FourCC {
 impl fmt::Debug for FourCC {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let code: u32 = self.into();
-        let string = String::from_utf8_lossy(&self.value[..]);
-        write!(f, "{} / {:#010X}", string, code)
+        write!(f, "{} / {:#010X}", self.value, code)
     }
 }
 
 impl fmt::Display for FourCC {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", String::from_utf8_lossy(&self.value[..]))
+        write!(f, "{}", self.value)
     }
 }
 
 const DISPLAY_TYPE_VIDEO: &str = "Video";
 const DISPLAY_TYPE_AUDIO: &str = "Audio";
-const DISPLAY_TYPE_SUBTITLE: &str = "Subtitle";
 
 const HANDLER_TYPE_VIDEO: &str = "vide";
-const HANDLER_TYPE_VIDEO_FOURCC: [u8; 4] = [b'v', b'i', b'd', b'e'];
-
 const HANDLER_TYPE_AUDIO: &str = "soun";
-const HANDLER_TYPE_AUDIO_FOURCC: [u8; 4] = [b's', b'o', b'u', b'n'];
-
-const HANDLER_TYPE_SUBTITLE: &str = "sbtl";
-const HANDLER_TYPE_SUBTITLE_FOURCC: [u8; 4] = [b's', b'b', b't', b'l'];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrackType {
     Video,
     Audio,
-    Subtitle,
 }
 
 impl fmt::Display for TrackType {
@@ -177,7 +180,6 @@ impl fmt::Display for TrackType {
         let s = match self {
             TrackType::Video => DISPLAY_TYPE_VIDEO,
             TrackType::Audio => DISPLAY_TYPE_AUDIO,
-            TrackType::Subtitle => DISPLAY_TYPE_SUBTITLE,
         };
         write!(f, "{}", s)
     }
@@ -189,8 +191,25 @@ impl TryFrom<&str> for TrackType {
         match handler {
             HANDLER_TYPE_VIDEO => Ok(TrackType::Video),
             HANDLER_TYPE_AUDIO => Ok(TrackType::Audio),
-            HANDLER_TYPE_SUBTITLE => Ok(TrackType::Subtitle),
             _ => Err(Error::InvalidData("unsupported handler type")),
+        }
+    }
+}
+
+impl Into<&str> for TrackType {
+    fn into(self) -> &'static str {
+        match self {
+            TrackType::Video => HANDLER_TYPE_VIDEO,
+            TrackType::Audio => HANDLER_TYPE_AUDIO,
+        }
+    }
+}
+
+impl Into<&str> for &TrackType {
+    fn into(self) -> &'static str {
+        match self {
+            TrackType::Video => HANDLER_TYPE_VIDEO,
+            TrackType::Audio => HANDLER_TYPE_AUDIO,
         }
     }
 }
@@ -198,38 +217,24 @@ impl TryFrom<&str> for TrackType {
 impl TryFrom<&FourCC> for TrackType {
     type Error = Error;
     fn try_from(fourcc: &FourCC) -> Result<TrackType> {
-        match fourcc.value {
-            HANDLER_TYPE_VIDEO_FOURCC => Ok(TrackType::Video),
-            HANDLER_TYPE_AUDIO_FOURCC => Ok(TrackType::Audio),
-            HANDLER_TYPE_SUBTITLE_FOURCC => Ok(TrackType::Subtitle),
-            _ => Err(Error::InvalidData("unsupported handler type")),
-        }
+        TrackType::try_from(fourcc.value.as_str())
     }
 }
 
-impl From<TrackType> for FourCC {
-    fn from(t: TrackType) -> FourCC {
-        match t {
-            TrackType::Video => HANDLER_TYPE_VIDEO_FOURCC.into(),
-            TrackType::Audio => HANDLER_TYPE_AUDIO_FOURCC.into(),
-            TrackType::Subtitle => HANDLER_TYPE_SUBTITLE_FOURCC.into(),
-        }
+impl Into<FourCC> for TrackType {
+    fn into(self) -> FourCC {
+        let s: &str = self.into();
+        FourCC::from(s)
     }
 }
 
 const MEDIA_TYPE_H264: &str = "h264";
-const MEDIA_TYPE_H265: &str = "h265";
-const MEDIA_TYPE_VP9: &str = "vp9";
 const MEDIA_TYPE_AAC: &str = "aac";
-const MEDIA_TYPE_TTXT: &str = "ttxt";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MediaType {
     H264,
-    H265,
-    VP9,
     AAC,
-    TTXT,
 }
 
 impl fmt::Display for MediaType {
@@ -244,35 +249,26 @@ impl TryFrom<&str> for MediaType {
     fn try_from(media: &str) -> Result<MediaType> {
         match media {
             MEDIA_TYPE_H264 => Ok(MediaType::H264),
-            MEDIA_TYPE_H265 => Ok(MediaType::H265),
-            MEDIA_TYPE_VP9 => Ok(MediaType::VP9),
             MEDIA_TYPE_AAC => Ok(MediaType::AAC),
-            MEDIA_TYPE_TTXT => Ok(MediaType::TTXT),
             _ => Err(Error::InvalidData("unsupported media type")),
         }
     }
 }
 
-impl From<MediaType> for &str {
-    fn from(t: MediaType) -> &'static str {
-        match t {
+impl Into<&str> for MediaType {
+    fn into(self) -> &'static str {
+        match self {
             MediaType::H264 => MEDIA_TYPE_H264,
-            MediaType::H265 => MEDIA_TYPE_H265,
-            MediaType::VP9 => MEDIA_TYPE_VP9,
             MediaType::AAC => MEDIA_TYPE_AAC,
-            MediaType::TTXT => MEDIA_TYPE_TTXT,
         }
     }
 }
 
-impl From<&MediaType> for &str {
-    fn from(t: &MediaType) -> &'static str {
-        match t {
+impl Into<&str> for &MediaType {
+    fn into(self) -> &'static str {
+        match self {
             MediaType::H264 => MEDIA_TYPE_H264,
-            MediaType::H265 => MEDIA_TYPE_H265,
-            MediaType::VP9 => MEDIA_TYPE_VP9,
             MediaType::AAC => MEDIA_TYPE_AAC,
-            MediaType::TTXT => MEDIA_TYPE_TTXT,
         }
     }
 }
@@ -291,7 +287,7 @@ impl TryFrom<(u8, u8)> for AvcProfile {
     type Error = Error;
     fn try_from(value: (u8, u8)) -> Result<AvcProfile> {
         let profile = value.0;
-        let constraint_set1_flag = (value.1 & 0x40) >> 7;
+        let constraint_set1_flag = value.1 & 0x40 >> 7;
         match (profile, constraint_set1_flag) {
             (66, 1) => Ok(AvcProfile::AvcConstrainedBaseline),
             (66, 0) => Ok(AvcProfile::AvcBaseline),
@@ -318,48 +314,10 @@ impl fmt::Display for AvcProfile {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum AudioObjectType {
-    AacMain = 1,                                       // AAC Main Profile
-    AacLowComplexity = 2,                              // AAC Low Complexity
-    AacScalableSampleRate = 3,                         // AAC Scalable Sample Rate
-    AacLongTermPrediction = 4,                         // AAC Long Term Predictor
-    SpectralBandReplication = 5,                       // Spectral band Replication
-    AACScalable = 6,                                   // AAC Scalable
-    TwinVQ = 7,                                        // Twin VQ
-    CodeExcitedLinearPrediction = 8,                   // CELP
-    HarmonicVectorExcitationCoding = 9,                // HVXC
-    TextToSpeechtInterface = 12,                       // TTSI
-    MainSynthetic = 13,                                // Main Synthetic
-    WavetableSynthesis = 14,                           // Wavetable Synthesis
-    GeneralMIDI = 15,                                  // General MIDI
-    AlgorithmicSynthesis = 16,                         // Algorithmic Synthesis
-    ErrorResilientAacLowComplexity = 17,               // ER AAC LC
-    ErrorResilientAacLongTermPrediction = 19,          // ER AAC LTP
-    ErrorResilientAacScalable = 20,                    // ER AAC Scalable
-    ErrorResilientAacTwinVQ = 21,                      // ER AAC TwinVQ
-    ErrorResilientAacBitSlicedArithmeticCoding = 22,   // ER Bit Sliced Arithmetic Coding
-    ErrorResilientAacLowDelay = 23,                    // ER AAC Low Delay
-    ErrorResilientCodeExcitedLinearPrediction = 24,    // ER CELP
-    ErrorResilientHarmonicVectorExcitationCoding = 25, // ER HVXC
-    ErrorResilientHarmonicIndividualLinesNoise = 26,   // ER HILN
-    ErrorResilientParametric = 27,                     // ER Parametric
-    SinuSoidalCoding = 28,                             // SSC
-    ParametricStereo = 29,                             // PS
-    MpegSurround = 30,                                 // MPEG Surround
-    MpegLayer1 = 32,                                   // MPEG Layer 1
-    MpegLayer2 = 33,                                   // MPEG Layer 2
-    MpegLayer3 = 34,                                   // MPEG Layer 3
-    DirectStreamTransfer = 35,                         // DST Direct Stream Transfer
-    AudioLosslessCoding = 36,                          // ALS Audio Lossless Coding
-    ScalableLosslessCoding = 37,                       // SLC Scalable Lossless Coding
-    ScalableLosslessCodingNoneCore = 38,               // SLC non-core
-    ErrorResilientAacEnhancedLowDelay = 39,            // ER AAC ELD
-    SymbolicMusicRepresentationSimple = 40,            // SMR Simple
-    SymbolicMusicRepresentationMain = 41,              // SMR Main
-    UnifiedSpeechAudioCoding = 42,                     // USAC
-    SpatialAudioObjectCoding = 43,                     // SAOC
-    LowDelayMpegSurround = 44,                         // LD MPEG Surround
-    SpatialAudioObjectCodingDialogueEnhancement = 45,  // SAOC-DE
-    AudioSync = 46,                                    // Audio Sync
+    AacMain = 1,
+    AacLowComplexity = 2,
+    AacScalableSampleRate = 3,
+    AacLongTermPrediction = 4,
 }
 
 impl TryFrom<u8> for AudioObjectType {
@@ -370,44 +328,6 @@ impl TryFrom<u8> for AudioObjectType {
             2 => Ok(AudioObjectType::AacLowComplexity),
             3 => Ok(AudioObjectType::AacScalableSampleRate),
             4 => Ok(AudioObjectType::AacLongTermPrediction),
-            5 => Ok(AudioObjectType::SpectralBandReplication),
-            6 => Ok(AudioObjectType::AACScalable),
-            7 => Ok(AudioObjectType::TwinVQ),
-            8 => Ok(AudioObjectType::CodeExcitedLinearPrediction),
-            9 => Ok(AudioObjectType::HarmonicVectorExcitationCoding),
-            12 => Ok(AudioObjectType::TextToSpeechtInterface),
-            13 => Ok(AudioObjectType::MainSynthetic),
-            14 => Ok(AudioObjectType::WavetableSynthesis),
-            15 => Ok(AudioObjectType::GeneralMIDI),
-            16 => Ok(AudioObjectType::AlgorithmicSynthesis),
-            17 => Ok(AudioObjectType::ErrorResilientAacLowComplexity),
-            19 => Ok(AudioObjectType::ErrorResilientAacLongTermPrediction),
-            20 => Ok(AudioObjectType::ErrorResilientAacScalable),
-            21 => Ok(AudioObjectType::ErrorResilientAacTwinVQ),
-            22 => Ok(AudioObjectType::ErrorResilientAacBitSlicedArithmeticCoding),
-            23 => Ok(AudioObjectType::ErrorResilientAacLowDelay),
-            24 => Ok(AudioObjectType::ErrorResilientCodeExcitedLinearPrediction),
-            25 => Ok(AudioObjectType::ErrorResilientHarmonicVectorExcitationCoding),
-            26 => Ok(AudioObjectType::ErrorResilientHarmonicIndividualLinesNoise),
-            27 => Ok(AudioObjectType::ErrorResilientParametric),
-            28 => Ok(AudioObjectType::SinuSoidalCoding),
-            29 => Ok(AudioObjectType::ParametricStereo),
-            30 => Ok(AudioObjectType::MpegSurround),
-            32 => Ok(AudioObjectType::MpegLayer1),
-            33 => Ok(AudioObjectType::MpegLayer2),
-            34 => Ok(AudioObjectType::MpegLayer3),
-            35 => Ok(AudioObjectType::DirectStreamTransfer),
-            36 => Ok(AudioObjectType::AudioLosslessCoding),
-            37 => Ok(AudioObjectType::ScalableLosslessCoding),
-            38 => Ok(AudioObjectType::ScalableLosslessCodingNoneCore),
-            39 => Ok(AudioObjectType::ErrorResilientAacEnhancedLowDelay),
-            40 => Ok(AudioObjectType::SymbolicMusicRepresentationSimple),
-            41 => Ok(AudioObjectType::SymbolicMusicRepresentationMain),
-            42 => Ok(AudioObjectType::UnifiedSpeechAudioCoding),
-            43 => Ok(AudioObjectType::SpatialAudioObjectCoding),
-            44 => Ok(AudioObjectType::LowDelayMpegSurround),
-            45 => Ok(AudioObjectType::SpatialAudioObjectCodingDialogueEnhancement),
-            46 => Ok(AudioObjectType::AudioSync),
             _ => Err(Error::InvalidData("invalid audio object type")),
         }
     }
@@ -416,48 +336,10 @@ impl TryFrom<u8> for AudioObjectType {
 impl fmt::Display for AudioObjectType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let type_str = match self {
-            AudioObjectType::AacMain => "AAC Main",
+            AudioObjectType::AacMain => "main",
             AudioObjectType::AacLowComplexity => "LC",
             AudioObjectType::AacScalableSampleRate => "SSR",
             AudioObjectType::AacLongTermPrediction => "LTP",
-            AudioObjectType::SpectralBandReplication => "SBR",
-            AudioObjectType::AACScalable => "Scalable",
-            AudioObjectType::TwinVQ => "TwinVQ",
-            AudioObjectType::CodeExcitedLinearPrediction => "CELP",
-            AudioObjectType::HarmonicVectorExcitationCoding => "HVXC",
-            AudioObjectType::TextToSpeechtInterface => "TTSI",
-            AudioObjectType::MainSynthetic => "Main Synthetic",
-            AudioObjectType::WavetableSynthesis => "Wavetable Synthesis",
-            AudioObjectType::GeneralMIDI => "General MIDI",
-            AudioObjectType::AlgorithmicSynthesis => "Algorithmic Synthesis",
-            AudioObjectType::ErrorResilientAacLowComplexity => "ER AAC LC",
-            AudioObjectType::ErrorResilientAacLongTermPrediction => "ER AAC LTP",
-            AudioObjectType::ErrorResilientAacScalable => "ER AAC scalable",
-            AudioObjectType::ErrorResilientAacTwinVQ => "ER AAC TwinVQ",
-            AudioObjectType::ErrorResilientAacBitSlicedArithmeticCoding => "ER AAC BSAC",
-            AudioObjectType::ErrorResilientAacLowDelay => "ER AAC LD",
-            AudioObjectType::ErrorResilientCodeExcitedLinearPrediction => "ER CELP",
-            AudioObjectType::ErrorResilientHarmonicVectorExcitationCoding => "ER HVXC",
-            AudioObjectType::ErrorResilientHarmonicIndividualLinesNoise => "ER HILN",
-            AudioObjectType::ErrorResilientParametric => "ER Parametric",
-            AudioObjectType::SinuSoidalCoding => "SSC",
-            AudioObjectType::ParametricStereo => "Parametric Stereo",
-            AudioObjectType::MpegSurround => "MPEG surround",
-            AudioObjectType::MpegLayer1 => "MPEG Layer 1",
-            AudioObjectType::MpegLayer2 => "MPEG Layer 2",
-            AudioObjectType::MpegLayer3 => "MPEG Layer 3",
-            AudioObjectType::DirectStreamTransfer => "DST",
-            AudioObjectType::AudioLosslessCoding => "ALS",
-            AudioObjectType::ScalableLosslessCoding => "SLS",
-            AudioObjectType::ScalableLosslessCodingNoneCore => "SLS Non-core",
-            AudioObjectType::ErrorResilientAacEnhancedLowDelay => "ER AAC ELD",
-            AudioObjectType::SymbolicMusicRepresentationSimple => "SMR Simple",
-            AudioObjectType::SymbolicMusicRepresentationMain => "SMR Main",
-            AudioObjectType::UnifiedSpeechAudioCoding => "USAC",
-            AudioObjectType::SpatialAudioObjectCoding => "SAOC",
-            AudioObjectType::LowDelayMpegSurround => "LD MPEG Surround",
-            AudioObjectType::SpatialAudioObjectCodingDialogueEnhancement => "SAOC-DE",
-            AudioObjectType::AudioSync => "Audio Sync",
         };
         write!(f, "{}", type_str)
     }
@@ -477,7 +359,6 @@ pub enum SampleFreqIndex {
     Freq12000 = 0x9,
     Freq11025 = 0xa,
     Freq8000 = 0xb,
-    Freq7350 = 0xc,
 }
 
 impl TryFrom<u8> for SampleFreqIndex {
@@ -496,7 +377,6 @@ impl TryFrom<u8> for SampleFreqIndex {
             0x9 => Ok(SampleFreqIndex::Freq12000),
             0xa => Ok(SampleFreqIndex::Freq11025),
             0xb => Ok(SampleFreqIndex::Freq8000),
-            0xc => Ok(SampleFreqIndex::Freq7350),
             _ => Err(Error::InvalidData("invalid sampling frequency index")),
         }
     }
@@ -504,20 +384,19 @@ impl TryFrom<u8> for SampleFreqIndex {
 
 impl SampleFreqIndex {
     pub fn freq(&self) -> u32 {
-        match *self {
-            SampleFreqIndex::Freq96000 => 96000,
-            SampleFreqIndex::Freq88200 => 88200,
-            SampleFreqIndex::Freq64000 => 64000,
-            SampleFreqIndex::Freq48000 => 48000,
-            SampleFreqIndex::Freq44100 => 44100,
-            SampleFreqIndex::Freq32000 => 32000,
-            SampleFreqIndex::Freq24000 => 24000,
-            SampleFreqIndex::Freq22050 => 22050,
-            SampleFreqIndex::Freq16000 => 16000,
-            SampleFreqIndex::Freq12000 => 12000,
-            SampleFreqIndex::Freq11025 => 11025,
-            SampleFreqIndex::Freq8000 => 8000,
-            SampleFreqIndex::Freq7350 => 7350,
+        match self {
+            &SampleFreqIndex::Freq96000 => 96000,
+            &SampleFreqIndex::Freq88200 => 88200,
+            &SampleFreqIndex::Freq64000 => 64000,
+            &SampleFreqIndex::Freq48000 => 48000,
+            &SampleFreqIndex::Freq44100 => 44100,
+            &SampleFreqIndex::Freq32000 => 32000,
+            &SampleFreqIndex::Freq24000 => 24000,
+            &SampleFreqIndex::Freq22050 => 22050,
+            &SampleFreqIndex::Freq16000 => 16000,
+            &SampleFreqIndex::Freq12000 => 12000,
+            &SampleFreqIndex::Freq11025 => 11025,
+            &SampleFreqIndex::Freq8000 => 8000,
         }
     }
 }
@@ -572,18 +451,6 @@ pub struct AvcConfig {
     pub pic_param_set: Vec<u8>,
 }
 
-#[derive(Debug, PartialEq, Clone, Default)]
-pub struct HevcConfig {
-    pub width: u16,
-    pub height: u16,
-}
-
-#[derive(Debug, PartialEq, Clone, Default)]
-pub struct Vp9Config {
-    pub width: u16,
-    pub height: u16,
-}
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct AacConfig {
     pub bitrate: u32,
@@ -603,16 +470,10 @@ impl Default for AacConfig {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Default)]
-pub struct TtxtConfig {}
-
 #[derive(Debug, PartialEq, Clone)]
 pub enum MediaConfig {
     AvcConfig(AvcConfig),
-    HevcConfig(HevcConfig),
-    Vp9Config(Vp9Config),
     AacConfig(AacConfig),
-    TtxtConfig(TtxtConfig),
 }
 
 #[derive(Debug)]
@@ -654,87 +515,5 @@ pub fn creation_time(creation_time: u64) -> u64 {
         creation_time - 2082844800
     } else {
         creation_time
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub enum DataType {
-    Binary = 0x000000,
-    Text = 0x000001,
-    Image = 0x00000D,
-    TempoCpil = 0x000015,
-}
-
-impl std::default::Default for DataType {
-    fn default() -> Self {
-        DataType::Binary
-    }
-}
-
-impl TryFrom<u32> for DataType {
-    type Error = Error;
-    fn try_from(value: u32) -> Result<DataType> {
-        match value {
-            0x000000 => Ok(DataType::Binary),
-            0x000001 => Ok(DataType::Text),
-            0x00000D => Ok(DataType::Image),
-            0x000015 => Ok(DataType::TempoCpil),
-            _ => Err(Error::InvalidData("invalid data type")),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub enum MetadataKey {
-    Title,
-    Year,
-    Poster,
-    Summary,
-}
-
-pub trait Metadata<'a> {
-    /// The video's title
-    fn title(&self) -> Option<Cow<str>>;
-    /// The video's release year
-    fn year(&self) -> Option<u32>;
-    /// The video's poster (cover art)
-    fn poster(&self) -> Option<&[u8]>;
-    /// The video's summary
-    fn summary(&self) -> Option<Cow<str>>;
-}
-
-impl<'a, T: Metadata<'a>> Metadata<'a> for &'a T {
-    fn title(&self) -> Option<Cow<str>> {
-        (**self).title()
-    }
-
-    fn year(&self) -> Option<u32> {
-        (**self).year()
-    }
-
-    fn poster(&self) -> Option<&[u8]> {
-        (**self).poster()
-    }
-
-    fn summary(&self) -> Option<Cow<str>> {
-        (**self).summary()
-    }
-}
-
-impl<'a, T: Metadata<'a>> Metadata<'a> for Option<T> {
-    fn title(&self) -> Option<Cow<str>> {
-        self.as_ref().and_then(|t| t.title())
-    }
-
-    fn year(&self) -> Option<u32> {
-        self.as_ref().and_then(|t| t.year())
-    }
-
-    fn poster(&self) -> Option<&[u8]> {
-        self.as_ref().and_then(|t| t.poster())
-    }
-
-    fn summary(&self) -> Option<Cow<str>> {
-        self.as_ref().and_then(|t| t.summary())
     }
 }
